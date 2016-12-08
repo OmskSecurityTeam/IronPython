@@ -1,0 +1,111 @@
+-----------------------------------------------------
+Полезные ссылки:
+-----------------------------------------------------
+
+http://ironpython.net/ - официальный сайт IronPython.
+https://ru.wikipedia.org/wiki/IronPython - для отстающих
+https://github.com/IronLanguages/main/releases/download/ipy-2.7.6.3/IronPython-2.7.6.3.msi - Установочный msi-файл
+https://github.com/IronLanguages/main/archive/ipy-2.7.6.3.zip - Исходники
+https://habrahabr.ru/post/149621/ - Создание тестового standalone(1-exe) приложения с использованием Windows Form
+http://metanit.com/sharp/tutorial/9.3.php - Использование IroNPython в .NET приложении (Интеграция IronPython в VS2013)
+https://habrahabr.ru/post/258123/	- Хорошая статья с описанием структуры исследуемого модуля (IPDLL.Module), основных принципов анализа
+
+
+-----------------------------------------------------
+Основные команды по сборке исполняемого файла
+-----------------------------------------------------
+
+C:\<Your_Path>\IronPython 2.7.6.3>ipy.exe Tools\Scripts\pyc.py /main:<PythonScriptName>.py /target:exe 
+По умолчанию создает два файла: Исполняемую(запускаемую) программу exe и библиотеку dll, содержащую основные .Net ресурсы, в том числе и преобразованный python код
+Для компиляции в рамках одного exe добавляется опция /standalone
+
+
+-----------------------------------------------------
+Как понять, что исползовался IronPython
+-----------------------------------------------------
+При декомпилировании в Ресурсах будут указаны основные библиотеки DLL, используемые IronPython при компиляции .NET приложения.
+К ним относятся:
+Dll.IronPython
+Dll.IronPython.Modules
+Dll.IronPython.SQLite
+Dll.IronPython.Wpf
+и др.
+
+
+-----------------------------------------------------
+Декомпиляция IronPython
+-----------------------------------------------------
+1) запускаем декомпилятор (Reflector, ILSpy или др.)
+2) Подключаем исследуемый exe (или dll) - File -> Open Assembly
+	Основной модуль (PythonMain) является wrapper-ом (оберткой), запускающей библиотеку, полученную из исходного питоновского кода
+	В Ресурсах, на ряду с компонентами .Net лежит библиотека IPDll.resources, полученная из исходного питоновского кода
+3) Проходим Resources->IPDll.resources -> IPDll.<PythonScriptName>
+4) Сохранаяем IPDll.<PythonScriptName> в виде отдельного файла (в Reflector - правая кнопка)
+5) Открываем IPDll.<PythonScriptName> повторно в декомпиляторе File -> Open Assembly
+6) Открываем класс DLRCachedCode
+7) Здесь представлены функции и классы, объявленные в первоначальном питон-коде и затем преобразованные в .NET с помощью IronPython
+8) Руками исследуем декомпилированный код. См. "Описание ключевых переменных и функций при реверсе"
+
+
+-----------------------------------------------------
+Описание ключевых переменных и функций при реверсе
+-----------------------------------------------------
+
+CachedOptimizedCode - глобальное пространство имен (перечень всех переменных функции __main__, подключенных модулей, функций и т. д.)
+
+box.Value - массив всех встречаемых в программе сущностей (все функции, классы, операции сложения/ветвления/цикла, методы объектов и др.). 
+Название данного массива может отличаться в зависимости от используемого декомпилятора:
+box.Value - для Reflectora
+strongBox.Value - для ILSpy
+В самом коде программы происходит обращение к элементу данного массива (например box.Value[0x30].Target()), что означает исполнение указанного действия
+Пример:
+box.Value[5] = (object[]) CallSite<Func<CallSite, object, object, object>>.Create(PythonOps.MakeBinaryOperationAction($globalContext, ExpressionType.Add));
+....
+(site = (CallSite<Func<CallSite, object, object, object>>) box.Value[5]).Target(site, a, b); // Вызывает функцию сложения двух объектов(чисел, строк и др.) и передает ей объекты a и b
+
+
+Функции IronPython наиболее часто встречаемые при декомпиляции
+PythonOps.MakeBinaryOperationAction						Бинарная операция (сложение, вычетание, равенство и др)
+PythonOps.MakeInvokeAction								Вызов функции (аргумент функции CallSignature определяет число аргументов в вызове)
+PythonOps.MakeComboAction								Операция if. В вргументах условие (например, PythonOps.MakeBinaryOperationAction(ExpressionType.Equal) показывает, что if проверяет равенство)
+PythonOps.MakeFunctionCode								Создание функции (определение параметров/метаданных функции/генерация кода функции)
+PythonOps.MakeGetAction									Вызов метода объекта (например, l.append, System.Math, Math.Abs и др.)
+PythonOps.MakeSetAction									Установить значение переменной/аттрибута объекта (Например, self.TextBox="Hello")
+PythonOps.MakeOperationAction 							см. Runtime/Binding/PythonOperationKind, зависит от кода-аргумента (0x12 - for/while; 0x5 - Contains и т.д.)
+PythonOps.ImportTop										import <Module>
+PythonOps.ImportWithNames								from <Module> import <SubModule> (from itertools import product)
+PythonOps.ImportStar									from <Module> import * (from itertools import *)
+PythonOps.MakeClass										Создание экземпляра класса
+PythonOps.MakeFunction									Создание экземпляра функции
+PythonOps.PublishModule									Объявление модуля (стандартная функция в заголовке программы)
+PythonOps.ModuleStarted									Старт main (стандартная функция в заголовке программы)
+PythonOps.GetEnumeratorValues							Получить "срез" объекта. Например buf[10:12] 
+PythonOps.MakeConversionAction							Преобразование типов
+PythonOps.ListAddForComprehension						Добавить элемент в список
+PythonOps.MakeGetIndexAction							Получить элемент из списка (аргументы: <unknown>, from, index)
+
+
+Определение функции: параметры функции передаются после Closure closure1 и PythonFunction $function.
+Например:
+private static object __init__$83(Closure closure1, PythonFunction $function, object self) - функция __init__ принимает единственный аргумента self
+private static object mysum$79(Closure closure1, PythonFunction $function, object a, object b)- функция mysum принимает два аргумента a, b
+
+
+Массив globalArrayFromContext - первоначально CachedOptimizedCode, в ходе программы может меняться меняться
+
+
+
+
+-----------------------------------------------------
+Интеграция IronPython в VisualStudio
+-----------------------------------------------------
+1) Solution Explorer - Reference - Add Reference - Browse: Здесь указываем путь к библиотеки IronPython.dll (или другим библиотекам, которые вы хотите подключить к проекту)
+2) Подключаем пространство имен:
+	using IronPython.Hosting; // IronPython.dll
+	using Microsoft.Scripting.Hosting; //Microsoft.Scripting.dll
+3) Код исполнения скрипта на python-е
+	 		ScriptEngine engine = Python.CreateEngine();
+            ScriptScope scope = engine.CreateScope();
+            engine.Execute("ret_val = 'hello, world'", scope);
+            textBox1.Text = scope.GetVariable("ret_val");
+   Первый аргумент функции engine.Execute может быть адрес к нужному python-скрипту
